@@ -33,12 +33,6 @@ Work with Overleaf projects directly from your command line. Edit locally with y
 
 ## Installation
 
-### For AI agents (via AgentSkills)
-
-```bash
-npx skills add aloth/olcli
-```
-
 ### Homebrew (macOS/Linux)
 
 ```bash
@@ -58,6 +52,12 @@ Or use with `npx` without installation:
 
 ```bash
 npx @aloth/olcli list
+```
+
+### For AI agents (via AgentSkills)
+
+```bash
+npx skills add aloth/olcli
 ```
 
 ## Quick Start
