@@ -314,19 +314,57 @@ export class OverleafClient {
   }
 
   /**
+   * Download a URL as a Buffer using Node.js http/https modules.
+   *
+   * This avoids fetch's strict header validation which rejects non-Latin1
+   * characters in response headers (e.g. Content-Disposition with Unicode
+   * project names). See: https://github.com/aloth/olcli/issues/2
+   */
+  private async downloadBuffer(url: string): Promise<Buffer> {
+    const { default: https } = await import('node:https');
+    const { default: http } = await import('node:http');
+
+    const doRequest = (reqUrl: string): Promise<Buffer> => {
+      return new Promise((resolve, reject) => {
+        const parsedUrl = new URL(reqUrl);
+        const transport = parsedUrl.protocol === 'https:' ? https : http;
+
+        const req = transport.get(reqUrl, {
+          headers: this.getHeaders(),
+        }, (res) => {
+          // Follow redirects
+          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            const redirectUrl = new URL(res.headers.location, reqUrl).toString();
+            doRequest(redirectUrl).then(resolve, reject);
+            return;
+          }
+
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`Download failed: ${res.statusCode}`));
+            return;
+          }
+
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+      });
+    };
+
+    return doRequest(url);
+  }
+
+  /**
    * Download project as zip
+   *
+   * Uses downloadBuffer to avoid ByteString errors from non-Latin1
+   * Content-Disposition headers. See: https://github.com/aloth/olcli/issues/2
    */
   async downloadProject(projectId: string): Promise<Buffer> {
-    const response = await fetch(DOWNLOAD_URL.replace('{id}', projectId), {
-      headers: this.getHeaders()
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to download project: ${response.status}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const url = DOWNLOAD_URL.replace('{id}', projectId);
+    return this.downloadBuffer(url);
   }
 
   /**
@@ -370,17 +408,7 @@ export class OverleafClient {
    */
   async downloadPdf(projectId: string): Promise<Buffer> {
     const { pdfUrl } = await this.compileProject(projectId);
-
-    const response = await fetch(pdfUrl, {
-      headers: this.getHeaders()
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to download PDF: ${response.status}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return this.downloadBuffer(pdfUrl);
   }
 
   /**
@@ -996,15 +1024,6 @@ export class OverleafClient {
    * Download a compile output file (logs, bbl, aux, etc.)
    */
   async downloadOutputFile(url: string): Promise<Buffer> {
-    const response = await fetch(url, {
-      headers: this.getHeaders()
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to download output file: ${response.status}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return this.downloadBuffer(url);
   }
 }
