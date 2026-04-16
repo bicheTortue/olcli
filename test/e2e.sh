@@ -20,6 +20,17 @@ CLEANUP_FILES=()
 CLEANUP_REMOTE_FILES=()
 EXE="$(pwd)/dist/cli.js"
 
+if test -f $EXE; then
+  if ! [[ -x "$EXE" ]]
+  then
+    chmod +x $EXE
+  fi
+else
+  echo "Binary file does not exist, compile first."
+  exit
+fi
+
+
 # Test project name (override with OLCLI_E2E_PROJECT_NAME)
 PROJECT_NAME="${OLCLI_E2E_PROJECT_NAME:-olcli test}"
 
