@@ -10,6 +10,19 @@ import { CookieJar, Cookie } from 'tough-cookie';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  getSessionCookie,
+  setSessionCookie,
+  getLastProject,
+  setLastProject,
+  getConfigPath,
+  saveOlAuth,
+  clearConfig,
+  getBaseUrl,
+  setBaseUrl,
+  getSessionCookieName,
+  setSessionCookieName
+} from './config.js';
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +70,23 @@ export interface Credentials {
   cookies: Record<string, string>;
   csrf: string;
   baseUrl?: string;
+}
+
+/**
+ * Helper to get authenticated client
+ */
+export async function getClient(cookieOpt?: string, baseUrlOpt?: string): Promise<OverleafClient> {
+  const cookie = cookieOpt || getSessionCookie();
+  if (!cookie) {
+    console.error('No session cookie found.');
+    console.error('Set one with: olcli auth --cookie <session_cookie>');
+    console.error('Or set OVERLEAF_SESSION environment variable');
+    console.error('Or create .olauth file in current directory');
+    process.exit(1);
+  }
+  const baseUrl = baseUrlOpt || getBaseUrl();
+  const cookieName = getSessionCookieName();
+  return OverleafClient.fromSessionCookie(cookie, baseUrl, cookieName);
 }
 
 export class OverleafClient {

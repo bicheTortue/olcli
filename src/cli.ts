@@ -12,7 +12,7 @@ import ora from 'ora';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { OverleafClient } from './client.js';
+import { OverleafClient, getClient } from './client.js';
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,22 +41,6 @@ program
 .option('--base-url <url>', 'Overleaf instance base URL (overrides OVERLEAF_BASE_URL and config)')
 .option('--cookie-name <name>', 'Session cookie name (default: overleaf_session2, use overleaf.sid for older instances)');
 
-/**
- * Helper to get authenticated client
- */
-async function getClient(cookieOpt?: string, baseUrlOpt?: string): Promise<OverleafClient> {
-  const cookie = cookieOpt || getSessionCookie();
-  if (!cookie) {
-    console.error(chalk.red('No session cookie found.'));
-    console.error('Set one with: olcli auth --cookie <session_cookie>');
-    console.error('Or set OVERLEAF_SESSION environment variable');
-    console.error('Or create .olauth file in current directory');
-    process.exit(1);
-  }
-  const baseUrl = baseUrlOpt || (program.opts().baseUrl as string | undefined) || getBaseUrl();
-  const cookieName = (program.opts().cookieName as string | undefined) || getSessionCookieName();
-  return OverleafClient.fromSessionCookie(cookie, baseUrl, cookieName);
-}
 
 /**
  * Resolve project from argument or .olcli.json in current directory
