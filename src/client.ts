@@ -302,6 +302,33 @@ export class OverleafClient {
   }
 
   /**
+   * Apply a Label to the current overleaf state
+   */
+  /*async applyOverleafLabel(projectId: string, message: string) {
+    try {
+  // Wait a brief moment (e.g., 1000ms) to ensure Overleaf's backend has finished
+  // processing the file uploads before we stamp the label on the timeline.
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // client.fetch automatically attaches the CSRF token and Cookie!
+  const response = await this.fetch(`/project/${projectId}/labels`, {
+  method: 'POST',
+  headers: {
+  'Content-Type': 'application/json',
+  'Accept': 'application/json'
+  },
+  body: JSON.stringify({ comment: message }) // 'comment' is the label text
+  });
+
+  if (!response.ok) {
+  console.error(`[olcli] Warning: Failed to apply label '${message}' (Status: ${response.status})`);
+  }
+  } catch (err) {
+  console.error(`[olcli] Warning: Failed to apply label '${message}'`);
+  }
+  }*/
+
+  /**
    * Get project by name
    */
   async getProject(name: string): Promise<Project | undefined> {

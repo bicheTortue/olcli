@@ -10,7 +10,6 @@ import { execSync } from 'node:child_process';
 const url = process.argv[3];
 //TODO add url support
 const projectId = url;
-process.argv = [process.argv[0], process.argv[1]];
 
 // Dynamically import the client
 const { getClient } = await import('./client.js');
@@ -21,6 +20,9 @@ const rl = readline.createInterface({
   terminal: false
 });
 
+let pendingImportRef = '';
+let pendingPushRef = '';
+
 for await (const line of rl) {
   // Uncomment to see the exact Git conversation!
   console.error(`[DEBUG] Git asked: ${line}`);
@@ -29,11 +31,11 @@ for await (const line of rl) {
   switch (argv[0]){
     case "capabilities" :
       console.log('import');
-    console.log('refspec HEAD:refs/heads/main');
+    //console.log('refspec HEAD:refs/heads/main');
+    console.log('refspec refs/heads/*:refs/heads/*'); // <-- MUST BE EXACTLY THIS
     console.log('option');
     console.log('list');
     console.log('push');
-    //console.log('fetch');
     console.log('');
     break;
     case "option":
@@ -43,16 +45,28 @@ for await (const line of rl) {
       runList(argv);
     break;
     case "push":
-      runPush(argv);
-    break;
-    case "fetch":
-      runFetch(argv);
+      // argv[1] looks like "refs/heads/main:refs/heads/main"
+      // We split by ':' and take the second half (the destination)
+      pendingPushRef = argv[1].split(':')[1];
+    //runPush(argv);
     break;
     case "import":
-      await runImport(argv);
+      // Git is asking for an import. Save it, but wait for the blank line!
+      pendingImportRef = argv[1];
+    //await runImport(pendingImportRef);
     break;
+
     case "":
+      // Git sent the blank line ("Over"). Now it is our turn to talk!
+      if (pendingImportRef !== '') {
+      await runImport(pendingImportRef);
+      pendingImportRef = ''; // Reset for the next conversation
+    } else if (pendingPushRef !== '') {
+      await runPush(pendingPushRef);  // <-- Call your new push function!
+      pendingPushRef = '';
+    } else {
       process.exit(0);
+    }
     break;
   }
 }
@@ -67,13 +81,7 @@ function runList(argv:  string[]): void {
   console.log(`@refs/heads/main HEAD`);
   console.log('');
 }
-function runPush(argv:  string[]): void {
-  console.log("TODO: " + argv)
-}
-function runFetch(argv:  string[]): void {
-  console.log("TODO: " + argv)
-}
-async function runImport(argv:  string[]){
+async function runPush(refToUpdate:  string){//TODO Check if push is necessary
   let tempDir = '';
   try {
     const client = await getClient();
@@ -84,7 +92,113 @@ async function runImport(argv:  string[]){
       console.error(`\n[olcli] Error: Could not find project '${projectId}'`);
       process.exit(1);
     }
-    const refToUpdate = argv[1] || 'refs/heads/main';
+    const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
+    const localTime = getLocalCommitTime(refToUpdate);
+    if (overleafTime > localTime ){ //Checking for newer version online
+      console.log(`error ${refToUpdate} Remote has newer changes. Please pull first.`);
+      console.log('');
+      //return;
+    }else{
+
+      // Create a fast lookup dictionary: { "chapters/intro.tex" => { id: "123", type: "doc" } }
+      const remoteFiles = new Map<string, { id: string, type: 'doc'|'file'|'folder' }>();
+
+      const projectInfo = await client.getProjectInfo(projectId);
+      if (projectInfo && projectInfo.rootFolder && projectInfo.rootFolder[0]) {
+        function buildFileMap(folder: any, currentPath: string = '') {
+          for (const doc of folder.docs || []) {
+            remoteFiles.set(currentPath ? `${currentPath}/${doc.name}` : doc.name, { id: doc._id, type: 'doc' });
+          }
+          for (const file of folder.fileRefs || []) {
+            remoteFiles.set(currentPath ? `${currentPath}/${file.name}` : file.name, { id: file._id, type: 'file' });
+          }
+          for (const sub of folder.folders || []) {
+            const subPath = currentPath ? `${currentPath}/${sub.name}` : sub.name;
+            remoteFiles.set(subPath, { id: sub._id, type: 'folder' });
+            buildFileMap(sub, subPath);
+          }
+        }
+        buildFileMap(projectInfo.rootFolder[0]);
+      }
+
+      let folderTree = await client.getFolderTreeFromSocket(projectId);
+      if (!folderTree) folderTree = {};
+
+      const remoteName = process.argv[2]; // e.g., 'origin'
+      const branchName = refToUpdate.split('/').pop(); // e.g., 'main'
+      const trackingRef = `refs/remotes/${remoteName}/${branchName}`;
+
+      const commits = execSync(`git rev-list --reverse ${trackingRef}..HEAD`, { encoding: 'utf8' }).trim().split('\n');
+
+      for (const hash of commits) {
+        // 1. Get the commit message (Subject line only)
+        const commitMsg = execSync(`git show -s --format=%s ${hash}`, { encoding: 'utf8' }).trim();
+        //console.error(`[olcli] Pushing commit: ${commitMsg}`);
+
+        // 2. Get files added/modified in THIS commit
+        const uploadStr = execSync(`git diff-tree --no-commit-id --name-only --diff-filter=ACMR -r ${hash}`, { encoding: 'utf8' }).trim();
+        const filesToUpload = uploadStr ? uploadStr.split('\n') : [];
+
+        // 3. Get files deleted in THIS commit
+        const deleteStr = execSync(`git diff-tree --no-commit-id --name-only --diff-filter=D -r ${hash}`, { encoding: 'utf8' }).trim();
+        const filesToDelete = deleteStr ? deleteStr.split('\n') : [];
+        //console.error(hash,filesToUpload, filesToDelete);
+
+        // 4. Upload the files
+        for (const file of filesToUpload) {
+          // CRUCIAL: Get the file content exactly as it was in THIS commit!
+          // Using execSync with `{ encoding: 'buffer' }` safely handles binary files like PDFs/PNGs
+          if ( file !== ".gitignore") {
+            try {
+              const content = execSync(`git show ${hash}:"${file}"`, { encoding: 'buffer' });
+              await client.uploadFile(projectId!, null, file, content, folderTree);
+              //spinner.text = `Uploading... (${uploaded}/${filesToUpload.length})`;
+            } catch (error: any) {
+              console.log(`error ${refToUpdate} Failed to upload ${file}: ${error.message}`);
+            }
+          }
+        }
+
+        // 5. Delete the files
+        for (const file of filesToDelete) {
+          const entity = remoteFiles.get(file);
+          if (!entity) {
+            console.log(`error ${refToUpdate} Failed to delete ${file}: Does not exist remotely`);
+          }else{
+            try {
+              await client.deleteEntity(projectId!, entity.id, entity.type);
+            } catch (error: any) {
+              console.log(`error ${refToUpdate} Failed to delete ${file}: ${error.message}`);
+            }
+          }
+        }
+
+        // 6. Apply the Overleaf Label!
+        //await client.applyOverleafLabel(projectId, commitMsg);
+      }
+
+      console.log(`ok ${refToUpdate}`);
+      //console.log(`error ${refToUpdate} Testing stuff`);
+      console.log('');
+    }
+
+  } catch (error: any) {
+    console.log(`error ${refToUpdate} Push failed: ${error.message}`);
+    console.log('');
+  }
+}
+
+async function runImport(refToUpdate:  string){
+  let tempDir = '';
+  try {
+    const client = await getClient();
+
+    let projInfo = await client.getProjectById(projectId);
+    if (!projInfo) projInfo = await client.getProject(projectId);
+    if (!projInfo) {
+      console.error(`\n[olcli] Error: Could not find project '${projectId}'`);
+      process.exit(1);
+    }
     const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
     const localTime = getLocalCommitTime(refToUpdate);
     const hasLocalHistory = localTime > 0;
@@ -137,7 +251,8 @@ async function runImport(argv:  string[]){
 
       let streamData = '';
       // FIX 2: Explicitly reset the branch to accept our new commit
-      streamData += `reset ${refToUpdate}\n`;
+      //streamData += `feature done\n`; // <-- MUST BE HERE!
+      //streamData += `reset ${refToUpdate}\n`;
       streamData += `commit ${refToUpdate}\n`;
       // FIX 3: Add the mandatory mark and author fields
       streamData += `mark :1\n`;
@@ -150,6 +265,9 @@ async function runImport(argv:  string[]){
         streamData += `from ${refToUpdate}^0\n`;
       }
 
+
+      // DEBUG: Print the header to the terminal so we can see if it's formatted perfectly!
+      //console.error(`\n[DEBUG STREAM]\n${streamData}`);
       process.stdout.write(streamData);
 
       for (const filePath of files) {
