@@ -94,7 +94,8 @@ async function runPush(refToUpdate:  string){//TODO Check if push is necessary
     }
     const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
     const localTime = getLocalCommitTime(refToUpdate);
-    if (overleafTime > localTime ){ //Checking for newer version online
+
+    if (overleafTime > localTime ){ //Checking for newer version online //TODO add is up-to-date check
       console.log(`error ${refToUpdate} Remote has newer changes. Please pull first.`);
       console.log('');
       //return;
@@ -136,6 +137,7 @@ async function runPush(refToUpdate:  string){//TODO Check if push is necessary
         //console.error(`[olcli] Pushing commit: ${commitMsg}`);
 
         // 2. Get files added/modified in THIS commit
+        console.error(hash)
         const uploadStr = execSync(`git diff-tree --no-commit-id --name-only --diff-filter=ACMR -r ${hash}`, { encoding: 'utf8' }).trim();
         const filesToUpload = uploadStr ? uploadStr.split('\n') : [];
 
