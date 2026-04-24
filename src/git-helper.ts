@@ -62,12 +62,12 @@ for await (const line of rl) {
   }
 }
 
-    /*
-     * Function handling the option request from git-remote-helper
-     */
-function runOption(argv:  string[]): void {//TODO: Actually handle options
-  console.log("unsupported")
-}
+/*
+ * Function handling the option request from git-remote-helper
+ */
+    function runOption(argv:  string[]): void {//TODO: Actually handle options
+      console.log("unsupported")
+    }
 /*
  * Function handling the list request from git-remote-helper
  */
@@ -209,7 +209,17 @@ async function runPush(refToUpdate:  string){
           }
         }
 
-        //await client.applyOverleafLabel(projectId, commitMsg);
+        /*
+           try {
+
+           const project = await client.getProjectInfo(projectId);
+
+           await client.applyOverleafLabel(projectId, commitMsg, project.version || 0);
+
+           } catch (err: any) {
+           console.error(`  -> Warning: Failed to apply label '${commitMsg}'`);
+           }
+           */
       }
 
       // Getting new last updated time from overleaf
