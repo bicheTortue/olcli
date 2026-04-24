@@ -46,6 +46,7 @@ export interface ProjectInfo {
   name: string;
   rootDoc_id?: string;
   rootFolder: FolderEntry[];
+  version: number;
 }
 
 export interface FolderEntry {
@@ -304,26 +305,24 @@ export class OverleafClient {
   /**
    * Apply a Label to the current overleaf state
    */
-  /*
-     async applyOverleafLabel(projectId: string, message: string, version: number): Promise<void> {
-     await new Promise(resolve => setTimeout(resolve, 100));
+  async applyOverleafLabel(projectId: string, message: string, version: number): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, 100));
 
-     const url = `${this.baseUrl}/project/${projectId}/labels`;
+    const url = `${this.baseUrl}/project/${projectId}/labels`;
 
-     const response = await fetch(url, {
-     method: 'POST',
-     headers: this.getHeaders(true),
-     body: JSON.stringify({
-     comment: message,
-     version: version
-     })
-     });
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+      body: JSON.stringify({
+        comment: message,
+        version: version
+      })
+    });
 
-     if (!response.ok) {
-     throw new Error(`Failed to create label: ${response.status}`);
-     }
-     }
-     */
+    if (!response.ok) {
+      throw new Error(`Failed to create label: ${response.status}`);
+    }
+  }
 
   /**
    * Get project by name
@@ -385,11 +384,13 @@ export class OverleafClient {
 
                 if (projectData) {
                   // Map the socket data to the strict TypeScript ProjectInfo interface
+                  //console.error(projectData.version);
                   return {
                     _id: projectData._id,
                     name: projectData.name,
                     rootDoc_id: projectData.rootDoc_id,
-                    rootFolder: projectData.rootFolder
+                    rootFolder: projectData.rootFolder,
+                    version: parseInt(projectData.version) // <-- Add this line!
                   };
                 }
               }

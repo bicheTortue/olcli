@@ -219,12 +219,13 @@ async function runPush(refToUpdate:  string){
 
            const project = await client.getProjectInfo(projectId);
 
-           await client.applyOverleafLabel(projectId, commitMsg, project.version || 0);
+        //console.error(project.version);
+        await client.applyOverleafLabel(projectId, commitMsg, project.version || 0);
 
-           } catch (err: any) {
-           console.error(`  -> Warning: Failed to apply label '${commitMsg}'`);
-           }
-           */
+        } catch (err: any) {
+        console.error(`  -> Warning: Failed to apply label '${commitMsg}'`);
+        }
+        */
       }
 
       // Getting new last updated time from overleaf
