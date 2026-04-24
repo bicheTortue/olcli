@@ -76,12 +76,47 @@ function runOption(argv:  string[]): void {
   console.log("unsupported")
 }
 function runList(argv:  string[]): void {
-  // The '?' tells Git to trust the fast-import stream to create the hash
-  console.log(`? refs/heads/main`);
+  let hash = '?';
+  try {
+    const remoteName = process.argv[2];
+    // Ask Git what the last known commit of the remote was
+    hash = execSync(`git rev-parse refs/remotes/${remoteName}/main`, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8'
+    }).trim();
+  } catch {
+    // If it fails (e.g., very first clone), we fall back to '?'
+    hash = '?';
+  }
+
+  console.log(`${hash} refs/heads/main`);
   console.log(`@refs/heads/main HEAD`);
   console.log('');
 }
+
 async function runPush(refToUpdate:  string){//TODO Check if push is necessary
+
+  const remoteName = process.argv[2]; // e.g., 'origin'
+  const branchName = refToUpdate.split('/').pop(); // e.g., 'main'
+  const trackingRef = `refs/remotes/${remoteName}/${branchName}`;
+
+  let commitsStr = '';
+  try {
+    // Find commits that exist locally but haven't been pushed to the remote
+    commitsStr = execSync(`git rev-list --reverse ${trackingRef}..${refToUpdate}`, { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+  } catch (e) {
+    // If trackingRef doesn't exist (e.g., very first push), grab all local commits
+    commitsStr = execSync(`git rev-list --reverse ${refToUpdate}`, { encoding: 'utf8' }).trim();
+  }
+
+  if (!commitsStr) {
+    //console.error(`[olcli] Everything up-to-date.`);
+    console.log(`ok ${refToUpdate}`);
+    console.log('');
+    return; // EXIT EARLY! No API calls made.
+  }
+  const commits = commitsStr.split('\n');
+
   let tempDir = '';
   try {
     const client = await getClient();
@@ -89,11 +124,12 @@ async function runPush(refToUpdate:  string){//TODO Check if push is necessary
     let projInfo = await client.getProjectById(projectId);
     if (!projInfo) projInfo = await client.getProject(projectId);
     if (!projInfo) {
-      console.error(`\n[olcli] Error: Could not find project '${projectId}'`);
-      process.exit(1);
+      console.log(`error ${refToUpdate} Could not find project : ${projectId}`);
+      //process.exit(1);
+      return;
     }
     const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
-    const localTime = getLocalCommitTime(refToUpdate);
+    const localTime = getLastSyncTime();
 
     if (overleafTime > localTime ){ //Checking for newer version online //TODO add is up-to-date check
       console.log(`error ${refToUpdate} Remote has newer changes. Please pull first.`);
@@ -125,11 +161,7 @@ async function runPush(refToUpdate:  string){//TODO Check if push is necessary
       let folderTree = await client.getFolderTreeFromSocket(projectId);
       if (!folderTree) folderTree = {};
 
-      const remoteName = process.argv[2]; // e.g., 'origin'
-      const branchName = refToUpdate.split('/').pop(); // e.g., 'main'
-      const trackingRef = `refs/remotes/${remoteName}/${branchName}`;
-
-      const commits = execSync(`git rev-list --reverse ${trackingRef}..HEAD`, { encoding: 'utf8' }).trim().split('\n');
+      //const commits = execSync(`git rev-list --reverse ${trackingRef}..HEAD`, { encoding: 'utf8' }).trim().split('\n');
 
       for (const hash of commits) {
         // 1. Get the commit message (Subject line only)
@@ -174,10 +206,52 @@ async function runPush(refToUpdate:  string){//TODO Check if push is necessary
             }
           }
         }
+        //Cleaning up subfolders
+        if(filesToDelete.length > 0) {
+          // 1. Get all entries [path, entity], filter only the folders
+          const folderEntries = Array.from(remoteFiles.entries())
+          .filter(([path, entity]) => entity.type === 'folder');
+
+          // 2. Sort by path length descending (deepest folders first!)
+          folderEntries.sort(([pathA], [pathB]) => pathB.split('/').length - pathA.split('/').length);
+
+          // 3. Process them bottom-up
+          for (const [folderPath, entity] of folderEntries) {
+            const folderPrefix = folderPath + '/';
+
+            // Check if ANY key left in the map starts with this folder's path
+            if (! Array.from(remoteFiles.keys()).some(
+              key => key.startsWith(folderPrefix)
+            )) {
+              //console.error(`  -> Deleting empty remote folder: ${folderPath}...`);
+
+              try {
+                await client.deleteEntity(projectId, entity.id, 'folder');
+                // Remove it from the Map so its parent knows it is gone!
+                remoteFiles.delete(folderPath);
+              } catch (e) {
+                console.log(`error ${refToUpdate} Failed to delete folder ${folderPath}`);
+              }
+            }
+          }
+        }
 
         // 6. Apply the Overleaf Label!
         //await client.applyOverleafLabel(projectId, commitMsg);
       }
+
+      // After your push loops finish:
+      // 1. Fetch the new project info to get Overleaf's newly updated timestamp
+      let projInfo = await client.getProjectById(projectId);
+      if (!projInfo) projInfo = await client.getProject(projectId);
+      if (!projInfo) {
+        console.log(`error ${refToUpdate} Could not find project : ${projectId}`);
+        return;
+      }
+      const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
+
+      // 2. Save it to Git config!
+      setLastSyncTime(overleafTime);
 
       console.log(`ok ${refToUpdate}`);
       //console.log(`error ${refToUpdate} Testing stuff`);
@@ -202,7 +276,8 @@ async function runImport(refToUpdate:  string){
       process.exit(1);
     }
     const overleafTime = Math.floor(new Date(projInfo.lastUpdated).getTime() / 1000);
-    const localTime = getLocalCommitTime(refToUpdate);
+    const localTime = getLastSyncTime();
+    console.error(localTime, overleafTime)
     const hasLocalHistory = localTime > 0;
 
     if (overleafTime === localTime) {
@@ -293,7 +368,9 @@ async function runImport(refToUpdate:  string){
         console.log(''); // Tell Git the batch is complete!
       });
 
+
       // --- END FAST-IMPORT STREAM ---
+      setLastSyncTime(overleafTime);
     }
 
   } catch (error: any) {
@@ -322,4 +399,18 @@ function getLocalCommitHash(ref: string): string {
   } catch {
     return '';
   }
+}
+function getLastSyncTime(): number {
+  try {
+    // Reads the custom value from .git/config
+    const out = execSync(`git config overleaf.lastsync`, { encoding: 'utf8' });
+    return parseInt(out.trim(), 10);
+  } catch {
+    return 0; // Returns 0 if we've never synced before
+  }
+}
+
+function setLastSyncTime(timestamp: number) {
+  // Saves the value into .git/config
+  execSync(`git config overleaf.lastsync ${timestamp}`);
 }
