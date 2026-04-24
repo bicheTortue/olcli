@@ -140,7 +140,7 @@ export class OverleafClient {
     // Fetch CSRF token from project page
     const initialHeaders: Record<string, string> = {
       'Cookie': Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '),
-      'User-Agent': USER_AGENT
+        'User-Agent': USER_AGENT
     };
     const bootstrapClient = new OverleafClient({ cookies, csrf: 'bootstrap', baseUrl });
     const response = await bootstrapClient.httpRequest(`${baseUrl}/project`, {
@@ -413,7 +413,7 @@ export class OverleafClient {
   }
 
   /**
-   * Get detailed project info including file tree (via WebSocket)
+   * Get detailed project info including file tree
    */
   async getProjectInfo(projectId: string): Promise<ProjectInfo> {
     const response = await this.httpRequest(`${this.projectUrl()}/${projectId}`, {
@@ -421,84 +421,50 @@ export class OverleafClient {
       expect: 'text'
     });
 
-    try {
-      // 1. Initiate Socket.io Handshake
-      const handshakeUrl = `${this.baseUrl}/socket.io/1/?projectId=${encodeURIComponent(projectId)}&t=${Date.now()}`;
-      const handshakeResponse = await this.fetchWithTimeout(handshakeUrl, {
-        headers: { 'Cookie': this.getCookieHeader(), 'User-Agent': USER_AGENT }
-      }, 5000);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project info: ${response.status}`);
+    }
 
     this.applySetCookieHeaders(response.headers['set-cookie'] as string[] | undefined);
 
     const html = response.body as string;
     const $ = cheerio.load(html);
 
-      const handshakeBody = (await handshakeResponse.text()).trim();
-      sid = handshakeBody.split(':')[0];
-      if (!sid) throw new Error('Could not parse socket session ID');
+    // Look for project data in meta tags
+    let projectInfo: ProjectInfo | undefined;
 
-      // 2. Poll the socket for the project data
-      const pollUrl = `${this.baseUrl}/socket.io/1/xhr-polling/${sid}?projectId=${encodeURIComponent(projectId)}&t=${Date.now()}`;
-
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const pollResponse = await this.fetchWithTimeout(pollUrl, {
-          headers: { 'Cookie': this.getCookieHeader(), 'User-Agent': USER_AGENT }
-        }, 5000);
-
-        if (!pollResponse.ok) throw new Error(`Socket poll failed: ${pollResponse.status}`);
-        this.applySetCookieHeaders(pollResponse.headers);
-
-        const payload = await pollResponse.text();
-        const packets = this.decodeSocketIoPayload(payload);
-
-        for (const packet of packets) {
-          // Look for the main event packet
-          if (packet.startsWith('5:::')) {
-            try {
-              const payloadJson = JSON.parse(packet.slice(4));
-              if (payloadJson?.name === 'joinProjectResponse') {
-                const projectData = payloadJson?.args?.[0]?.project;
-
-                if (projectData) {
-                  // Map the socket data to the strict TypeScript ProjectInfo interface
-                  return {
-                    _id: projectData._id,
-                    name: projectData.name,
-                    rootDoc_id: projectData.rootDoc_id,
-                    rootFolder: projectData.rootFolder
-                  };
-                }
-              }
-            } catch (e) { }
-          }
-
-          // Reply to heartbeat
-          if (packet.startsWith('2::')) {
-            await this.fetchWithTimeout(pollUrl, {
-              method: 'POST',
-              headers: { 'Cookie': this.getCookieHeader(), 'User-Agent': USER_AGENT, 'Content-Type': 'text/plain;charset=UTF-8' },
-              body: '2::'
-            }, 5000);
-          }
-        }
-      }
-    } finally {
-      // 3. Cleanly disconnect the socket
-      if (sid) {
-        try {
-          const disconnectUrl = `${this.baseUrl}/socket.io/1/xhr-polling/${sid}?projectId=${encodeURIComponent(projectId)}&t=${Date.now()}`;
-          await this.fetchWithTimeout(disconnectUrl, {
-            method: 'POST',
-            headers: { 'Cookie': this.getCookieHeader(), 'User-Agent': USER_AGENT, 'Content-Type': 'text/plain;charset=UTF-8' },
-            body: '0::'
-          }, 5000);
-        } catch { /* ignore */ }
+    // Try ol-project meta tag
+    const projectMeta = $('meta[name="ol-project"]').attr('content');
+    if (projectMeta) {
+      try {
+        projectInfo = JSON.parse(projectMeta);
+      } catch (e) {
+        // Continue
       }
     }
 
-    throw new Error('Could not parse project info from WebSocket');
-  }
+    // Try to find in other meta tags
+    if (!projectInfo) {
+      const metas = $('meta[content]').toArray();
+      for (const meta of metas) {
+        const content = $(meta).attr('content') || '';
+        if (content.includes('rootFolder')) {
+          try {
+            projectInfo = JSON.parse(content);
+            break;
+          } catch (e) {
+            // Continue
+          }
+        }
+      }
+    }
 
+    if (!projectInfo) {
+      throw new Error('Could not parse project info');
+    }
+
+    return projectInfo;
+  }
 
   /**
    * Download a URL as a Buffer using Node.js http/https modules.
