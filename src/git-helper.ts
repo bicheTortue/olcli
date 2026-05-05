@@ -7,24 +7,25 @@ import AdmZip from 'adm-zip';
 import { execSync } from 'node:child_process';
 import { OverleafClient } from './client.js';
 
-const remoteName = process.argv[2] || 'origin';
+const remote = process.argv[2] || 'origin';
 const url = process.argv[3];
 
-const urlT = url.split('/');
-const projectId = urlT[urlT.length -1];
 
 const { getClient } = await import('./client.js');
 
 class GitRemoteHelper {
   private remote: string;
   private projectId: string;
+  private baseUrl: string;
   private prefix: string;
   private client?: OverleafClient;
 
-  constructor(remote: string, projectId: string) {
+  constructor(remote: string, url: string) {
     this.remote = remote;
-    this.projectId = projectId;
     this.prefix = `refs/overleaf/${remote}`;
+    const urlT = url.split('/');
+    this.projectId = urlT[urlT.length -1];
+    this.baseUrl = urlT[0] + "//" + urlT[2];
   }
 
   public async initClient() {
@@ -295,7 +296,7 @@ async function main() {
     terminal: false
   });
 
-  const helper = new GitRemoteHelper(remoteName, projectId);
+  const helper = new GitRemoteHelper(remote, url);
 
   let pendingImports: string[] = [];
   let pendingPushes: string[] =[];
