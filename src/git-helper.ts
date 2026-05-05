@@ -109,8 +109,13 @@ class GitRemoteHelper {
       streamData += `feature done\n`;
       streamData += `commit ${privateRef}\n`;
       streamData += `mark :1\n`;
-      streamData += `author Overleaf Sync <sync@overleaf.com> ${overleafTime} +0000\n`;
-      streamData += `committer Overleaf Sync <sync@overleaf.com> ${overleafTime} +0000\n`;
+      if(!project.lastUpdatedBy){
+        streamData += `author Overleaf Sync <sync@overleaf.com> ${overleafTime} +0000\n`;
+        streamData += `committer Overleaf Sync <sync@overleaf.com> ${overleafTime} +0000\n`;
+      }else{
+        streamData += `author ${project.lastUpdatedBy.firstName} ${project.lastUpdatedBy.lastName} <${project.lastUpdatedBy.email}> ${overleafTime} +0000\n`;
+        streamData += `committer ${project.lastUpdatedBy.firstName} ${project.lastUpdatedBy.lastName} <${project.lastUpdatedBy.email}> ${overleafTime} +0000\n`;
+      }
       streamData += `data ${Buffer.byteLength(commitMsg, 'utf8')}\n`;
       streamData += commitMsg;
 
