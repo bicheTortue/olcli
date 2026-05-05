@@ -68,8 +68,8 @@ class GitRemoteHelper {
     try {
       const client = await this.initClient();
 
+      await client.forceSave(this.projectId); //Force save state online
       let project = await client.getProjectById(this.projectId);
-      if (!project) project = await client.getProject(this.projectId);
       if (!project) {
         console.error(`\n[olcli] Error: Could not find project '${this.projectId}'`);
         process.exit(1);
@@ -150,8 +150,8 @@ class GitRemoteHelper {
 
     try {
       const client = await this.initClient();
+      await client.forceSave(this.projectId);
       let project = await client.getProjectById(this.projectId);
-      if (!project) project = await client.getProject(this.projectId);
       if (!project) {
         console.error(`error ${remoteRef} Project not found`);
         return;

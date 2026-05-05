@@ -411,6 +411,17 @@ export class OverleafClient {
   }
 
   /**
+   * Forces Overleaf to flush real-time edits to the database by pinging the download endpoint
+   */
+  async forceSave(projectId: string): Promise<void> {
+    const url = this.downloadUrl(projectId);
+    await fetch(url, {
+      method: 'HEAD', // Only fetches headers, 0 bytes of data!
+      headers: this.getHeaders()
+    });
+  }
+
+  /**
    * Get project by name
    */
   async getProject(name: string): Promise<Project | undefined> {
