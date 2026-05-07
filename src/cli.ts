@@ -13,6 +13,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OverleafClient } from './client.js';
+import { spawn } from 'node:child_process';
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,54 @@ import {
 } from './config.js';
 
 const program = new Command();
+
+/**
+ * Helper to watch the files and auto compile them
+ */
+async function runWatch(mainFile: string, useDocker: boolean) {
+  if (!existsSync(mainFile)) {
+    console.error(chalk.red(`\n❌ Error: Could not find main document '${mainFile}'`));
+    process.exit(1);
+  }
+  const latexmkArgs = [
+    '-pdf',                     // Compile to PDF
+    '-interaction=nonstopmode', // Don't pause terminal on syntax errors
+    '-synctex=1',               // Enable SyncTeX (Click PDF to jump to code)
+    '-file-line-error',         // Format errors nicely
+    '-auxdir=.aux',             // Put all temp/aux files in a hidden .aux folder!
+    '-outdir=.build',           // Keep the final PDF in the root folder!
+    '-pvc',                     // MAGIC FLAG: Preview Continuously (Watch mode!)
+    mainFile
+  ];
+
+  console.log(chalk.cyan(`\nStarting local Overleaf compiler environment...`));
+  console.log(chalk.gray(`Watching for file changes. Press Ctrl+C to stop.\n`));
+
+  let command = 'latexmk';
+  let args = latexmkArgs;
+
+  if (useDocker) {
+    command = 'docker';
+    args =[
+      'run', '--rm', '-it',
+      '-v', `${process.cwd()}:/workdir`, // Mount current directory
+      '-w', '/workdir',                  // Set working directory
+      'texlive/texlive:latest',          // The official image Overleaf uses
+      'latexmk', ...latexmkArgs
+    ];
+  }
+
+  const compiler = spawn(command, args, { stdio: 'inherit' });
+
+  compiler.on('error', (err: any) => {
+    if (err.code === 'ENOENT') {
+      console.error(chalk.red(`\n❌ Error: '${command}' is not installed on your system.`));
+    } else {
+      console.error(chalk.red(`\nCompiler error: ${err.message}`));
+    }
+    process.exit(1);
+  });
+}
 
 /**
  * Helper to get authenticated client
@@ -1140,6 +1189,16 @@ program
   } else {
     console.log(chalk.yellow('✗ No session cookie found'));
   }
+});
+
+program
+.command('watch [mainFile]')
+.description('Locally compile and watch LaTeX files on change')
+.option('--docker', 'Use the official TeX Live Docker image (100% Overleaf identical)')
+.action((mainFile, options) => {
+  // Default to main.tex if no file is provided
+  const targetFile = mainFile || 'main.tex';
+  runWatch(targetFile, options.docker);
 });
 
 program.parse(process.argv);

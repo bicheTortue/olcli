@@ -102,6 +102,15 @@ class GitRemoteHelper {
       zip.extractAllTo(extractDir, true);
 
       const files = this.getFilesRecursively(extractDir);
+
+      const gitignorePath = join(extractDir, '.gitignore');
+
+      // Add the hidden .aux folder to it
+      writeFileSync(gitignorePath, '.aux/\n');
+      writeFileSync(gitignorePath, '.build/\n');
+
+      files.push(gitignorePath);
+
       const commitMsg = "Sync from Overleaf\n";
 
       let streamData = '';
