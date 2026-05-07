@@ -90,7 +90,6 @@ class GitRemoteHelper {
       }
 
       //TODO: Add with logs (options)
-      //console.error(`[olcli] Fetching project '${project.name}'...`);
       const zipBuffer = await client.downloadProject(this.projectId);
 
       tempDir = mkdtempSync(join(tmpdir(), 'overleaf-sync-'));
@@ -103,13 +102,16 @@ class GitRemoteHelper {
 
       const files = this.getFilesRecursively(extractDir);
 
-      const gitignorePath = join(extractDir, '.gitignore');
+      if (!files.some(f => f.endsWith('.gitignore'))) {
+        // Create the .gitignore file on disk inside the extracted directory
+        const gitignorePath = join(extractDir, '.gitignore');
 
-      // Add the hidden .aux folder to it
-      writeFileSync(gitignorePath, '.aux/\n');
-      writeFileSync(gitignorePath, '.build/\n');
+        // Add the hidden .aux folder to it
+        writeFileSync(gitignorePath, '.aux/\n.build/\n');
 
-      files.push(gitignorePath);
+        // Add it to our array so fast-import picks it up!
+        files.push(gitignorePath);
+      }
 
       const commitMsg = "Sync from Overleaf\n";
 

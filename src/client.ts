@@ -190,7 +190,8 @@ export class OverleafClient {
     // Update cookies if the bootstrap request added anything
     const updatedCookies = bootstrapClient.cookies;
     const client = new OverleafClient({ cookies: updatedCookies, csrf, baseUrl });
-    if(await client.verifySession()){
+    if(true){
+      //if(await client.verifySession()){
       return client;
     }else{
       console.error("Cookie out of date, updating...");
