@@ -102,7 +102,9 @@ class GitRemoteHelper {
 
       const files = this.getFilesRecursively(extractDir);
 
-      if (!files.some(f => f.endsWith('.gitignore'))) {
+      const parentHash = this.getLocalCommitHash(privateRef);
+
+      if (!files.some(f => f.endsWith('.gitignore')) && !parentHash) {
         // Create the .gitignore file on disk inside the extracted directory
         const gitignorePath = join(extractDir, '.gitignore');
 
@@ -129,7 +131,6 @@ class GitRemoteHelper {
       streamData += `data ${Buffer.byteLength(commitMsg, 'utf8')}\n`;
       streamData += commitMsg;
 
-      const parentHash = this.getLocalCommitHash(privateRef);
       if (parentHash) {
         streamData += `from ${parentHash}\n`;
       }
