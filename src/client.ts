@@ -24,7 +24,14 @@ import {
   getSessionCookieName,
   setSessionCookieName
 } from './config.js';
-import puppeteer from 'puppeteer';
+
+import vanillaPuppeteer from 'puppeteer';
+import { addExtra } from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
+const puppeteer = addExtra(vanillaPuppeteer as any);
+
+puppeteer.use(StealthPlugin());
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));

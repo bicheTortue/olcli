@@ -51,7 +51,9 @@
     "commander": "^12.1.0",
     "conf": "^13.0.0",
     "ora": "^8.0.1",
-    "puppeteer": "^24.42.0",
+    "puppeteer": "^24.43.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "tough-cookie": "^4.1.4"
   },
   "devDependencies": {
