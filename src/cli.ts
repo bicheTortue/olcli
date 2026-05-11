@@ -14,6 +14,13 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OverleafClient } from './client.js';
 import { spawn } from 'node:child_process';
+import {
+  loadIgnore,
+  shouldIgnore,
+  buildTexSiblingSet,
+  DEFAULT_IGNORE_PATTERNS,
+  type IgnoreContext,
+} from './ignore.js';
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +41,13 @@ import {
 } from './config.js';
 
 const program = new Command();
+
+program
+.name('olcli')
+.description('Overleaf CLI - interact with Overleaf projects from the command line')
+.version(VERSION)
+.option('--base-url <url>', 'Overleaf instance base URL (overrides OVERLEAF_BASE_URL and config)')
+.option('--cookie-name <name>', 'Session cookie name (default: overleaf_session2, use overleaf.sid for older instances)');
 
 /**
  * Helper to watch the files and auto compile them
@@ -90,24 +104,15 @@ async function getClient(baseUrlOpt?: string): Promise<OverleafClient> {
   const baseUrl = baseUrlOpt || getBaseUrl();
   const cookie = getSession(baseUrl);
   if (!cookie) {
-    console.error('No session cookie found.');
+    console.error(chalk.red('No session cookie found.'));
     console.error('Set one with: olcli auth --cookie <session_cookie>');
     console.error('Or set OVERLEAF_SESSION environment variable');
     console.error('Or create .olauth file in current directory');
     process.exit(1);
   }
-  const cookieName = getSessionCookieName();
+  const cookieName = (program.opts().cookieName as string | undefined) || getSessionCookieName();
   return OverleafClient.fromSessionCookie(cookie, baseUrl, cookieName);
 }
-
-
-program
-.name('olcli')
-.description('Overleaf CLI - interact with Overleaf projects from the command line')
-.version(VERSION)
-.option('--base-url <url>', 'Overleaf instance base URL (overrides OVERLEAF_BASE_URL and config)')
-.option('--cookie-name <name>', 'Session cookie name (default: overleaf_session2, use overleaf.sid for older instances)');
-
 
 /**
  * Resolve project from argument or .olcli.json in current directory
@@ -211,7 +216,6 @@ program
 
   const spinner = ora('Checking session...').start();
   try {
-    const baseUrl = (program.opts().baseUrl as string | undefined) || getBaseUrl();
     const cookieName = (program.opts().cookieName as string | undefined) || getSessionCookieName();
     const client = await OverleafClient.fromSessionCookie(cookie, baseUrl, cookieName);
     const projects = await client.listProjects();
@@ -520,47 +524,49 @@ program
   }
 });
 
-// NOTE: delete and rename commands are disabled - they require entity IDs
-// which are not exposed via the current Overleaf API without Socket.IO.
-// Use the Overleaf web UI for these operations.
-//
-// program
-//   .command('delete <file> [project]')
-//   .alias('rm')
-//   .description('Delete a file from a project')
-//   .option('--cookie <session>', 'Session cookie override')
-//   .action(async (file, project, options) => {
-//     const spinner = ora('Deleting file...').start();
-//     try {
-//       const client = await getClient(options.cookie);
-//       const proj = await resolveProject(client, project);
-//       await client.deleteByPath(proj.id, file);
-//       spinner.succeed(`Deleted: ${file}`);
-//       setLastProject(proj.id);
-//     } catch (error: any) {
-//       spinner.fail(`Failed: ${error.message}`);
-//       process.exit(1);
-//     }
-//   });
-//
-// program
-//   .command('rename <oldname> <newname> [project]')
-//   .alias('mv')
-//   .description('Rename a file in a project')
-//   .option('--cookie <session>', 'Session cookie override')
-//   .action(async (oldname, newname, project, options) => {
-//     const spinner = ora('Renaming file...').start();
-//     try {
-//       const client = await getClient(options.cookie);
-//       const proj = await resolveProject(client, project);
-//       await client.renameByPath(proj.id, oldname, newname);
-//       spinner.succeed(`Renamed: ${oldname} → ${newname}`);
-//       setLastProject(proj.id);
-//     } catch (error: any) {
-//       spinner.fail(`Failed: ${error.message}`);
-//       process.exit(1);
-//     }
-//   });
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE / RENAME COMMANDS
+// ─────────────────────────────────────────────────────────────────────────────
+// Use deleteByPath / renameByPath which resolve a path to an entity id via
+// /project/<id>/entities, then call the documented delete/rename endpoints.
+
+program
+.command('delete <file> [project]')
+.alias('rm')
+.description('Delete a file or folder from a project')
+.option('--cookie <session>', 'Session cookie override')
+.action(async (file, project, options) => {
+  const spinner = ora('Deleting file...').start();
+  try {
+    const client = await getClient(options.cookie);
+    const proj = await resolveProject(client, project);
+    await client.deleteByPath(proj.id, file);
+    spinner.succeed(`Deleted: ${file}`);
+    setLastProject(proj.id);
+  } catch (error: any) {
+    spinner.fail(`Failed: ${error.message}`);
+    process.exit(1);
+  }
+});
+
+program
+.command('rename <oldname> <newname> [project]')
+.alias('mv')
+.description('Rename a file or folder in a project')
+.option('--cookie <session>', 'Session cookie override')
+.action(async (oldname, newname, project, options) => {
+  const spinner = ora('Renaming file...').start();
+  try {
+    const client = await getClient(options.cookie);
+    const proj = await resolveProject(client, project);
+    await client.renameByPath(proj.id, oldname, newname);
+    spinner.succeed(`Renamed: ${oldname} → ${newname}`);
+    setLastProject(proj.id);
+  } catch (error: any) {
+    spinner.fail(`Failed: ${error.message}`);
+    process.exit(1);
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPILE COMMAND
@@ -692,11 +698,16 @@ program
       }
     }
 
-    // Save project metadata
+    // Save project metadata (with manifest of remote files for sync deletion tracking)
+    const remoteManifest: string[] = [];
+    for (const e of entries) {
+      if (!e.isDirectory) remoteManifest.push(e.entryName);
+    }
     writeFileSync(join(targetDir, '.olcli.json'), JSON.stringify({
       projectId,
       projectName,
-      lastPull: new Date().toISOString()
+      lastPull: new Date().toISOString(),
+      remoteManifest
     }, null, 2));
 
     if (skippedCount > 0) {
@@ -720,14 +731,16 @@ program
   }
 });
 
-
 program
 .command('push [dir]')
 .description('Upload local changes to Overleaf project')
 .option('--project <name>', 'Project name or ID (overrides .olcli.json)')
 .option('--all', 'Upload all files (not just changed)')
-.option('--dry-run', 'Show what would be uploaded/deleted without changing anything')
-.option('--probe-folder', 'Probe for correct folder ID')
+.option('--dry-run', 'Show what would be uploaded without uploading')
+.option('--probe-folder', 'Probe for correct folder ID (use if uploads fail with folder_not_found)')
+.option('--no-default-ignore', 'Disable built-in LaTeX artifact ignore list (only .olignore applies)')
+.option('--no-ignore', 'Disable all ignore filtering (escape hatch — uploads everything)')
+.option('--show-ignored', 'Print files skipped by ignore rules')
 .option('--cookie <session>', 'Session cookie override')
 .action(async (dir, options) => {
   const targetDir = dir || '.';
@@ -748,6 +761,7 @@ program
   }
 
   if (options.project) {
+    // Override with command line option
     projectId = undefined;
     projectName = options.project;
   }
@@ -778,110 +792,100 @@ program
 
     spinner.text = 'Scanning files...';
 
+    // Build ignore context (defaults + .olignore + .olignore.local)
+    const ignoreCtx = loadIgnore(targetDir, {
+      noDefaults: options.defaultIgnore === false,
+      disableAll: options.ignore === false,
+    });
+
     // Get list of files to upload
     const { readdirSync, statSync } = await import('node:fs');
 
     const filesToUpload: { path: string; relativePath: string }[] = [];
-    const allLocalPaths = new Set<string>();
+    const filesIgnored: string[] = [];
 
     function scanDir(currentDir: string, relativeBase: string = '') {
       const entries = readdirSync(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        // Skip hidden files and .olcli.json
-        if (entry.name.startsWith('.')) continue;
+      // Pre-compute sibling .tex set for the PDF special rule.
+      const texSiblings = buildTexSiblingSet(
+        entries.filter((e) => !e.isDirectory()).map((e) => e.name),
+      );
+        for (const entry of entries) {
+          // Skip hidden files and .olcli.json (always — predates ignore subsystem)
+          if (entry.name.startsWith('.')) continue;
 
-        const fullPath = join(currentDir, entry.name);
-        const relativePath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name;
+          const fullPath = join(currentDir, entry.name);
+          const relativePath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name;
 
-        if (!entry.isDirectory() && entry.name === 'output.pdf') continue;
-
-        if (entry.isDirectory()) {
-          scanDir(fullPath, relativePath);
-        } else {
-          allLocalPaths.add(relativePath);
-          // Check if file is newer than last pull (unless --all)
-          if (options.all || !lastPull) {
-            filesToUpload.push({ path: fullPath, relativePath });
+          if (entry.isDirectory()) {
+            // Test directory ignore (gitignore semantics: trailing slash matches dir)
+            if (shouldIgnore(`${relativePath}/`, ignoreCtx)) {
+              filesIgnored.push(`${relativePath}/`);
+              continue;
+            }
+            scanDir(fullPath, relativePath);
           } else {
-            const stats = statSync(fullPath);
-            if (stats.mtime > lastPull) {
+            if (shouldIgnore(relativePath, ignoreCtx, texSiblings)) {
+              filesIgnored.push(relativePath);
+              continue;
+            }
+            // Check if file is newer than last pull (unless --all)
+            if (options.all || !lastPull) {
               filesToUpload.push({ path: fullPath, relativePath });
+            } else {
+              const stats = statSync(fullPath);
+              if (stats.mtime > lastPull) {
+                filesToUpload.push({ path: fullPath, relativePath });
+              }
             }
           }
         }
-      }
     }
 
     scanDir(targetDir);
 
-    // ==========================================
-    // THE DELETION LOGIC
-    // ==========================================
-    const filesToDelete: { id: string; type: 'doc' | 'file' | 'folder' ; path: string }[] = [];
-
-    const projectInfo = await client.getProjectInfo(projectId);
-    if (projectInfo && projectInfo.rootFolder && projectInfo.rootFolder[0]) {
-
-      // Helper function to flatten Overleaf's nested tree
-      function flattenRemoteTree(folder: any, currentPath: string = '') {
-        // Text files
-        for (const doc of folder.docs || []) {
-          const docPath = currentPath ? `${currentPath}/${doc.name}` : doc.name;
-          if (!allLocalPaths.has(docPath)) filesToDelete.push({ id: doc._id, type: 'doc', path: docPath });
-        }
-        // Binary files (images, pdfs)
-        for (const file of folder.fileRefs || []) {
-          const filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
-          if (!allLocalPaths.has(filePath)) filesToDelete.push({ id: file._id, type: 'file', path: filePath });
-        }
-        // Subfolders
-        for (const sub of folder.folders || []) {
-          const subPath = currentPath ? `${currentPath}/${sub.name}` : sub.name;
-          flattenRemoteTree(sub, subPath);
-        }
+    if (options.showIgnored && filesIgnored.length > 0) {
+      spinner.stop();
+      console.log(chalk.bold(chalk.dim(`Ignored ${filesIgnored.length} file(s)/dir(s):`)));
+      for (const p of filesIgnored) {
+        console.log(chalk.dim(`  ${p}`));
       }
-
-      flattenRemoteTree(projectInfo.rootFolder[0]);
+      spinner.start('Scanning files...');
     }
 
-    // Early out
-    if (filesToUpload.length === 0 && filesToDelete.length === 0){
-      spinner.succeed('No local changes to upload.');
+    if (filesToUpload.length === 0) {
+      spinner.info('No files to upload');
       return;
     }
 
-    // Handle Dry Run
     if (options.dryRun) {
       spinner.stop();
-      console.log(chalk.bold(`Would upload ${filesToUpload.length} file(s):`));
-      filesToUpload.forEach(f => console.log(`  ${chalk.green('+ ' + f.relativePath)}`));
-
-      console.log(chalk.bold(`Would delete ${filesToDelete.length} remote file(s):`));
-      filesToDelete.forEach(f => console.log(`  ${chalk.red('- ' + f.path)}`));
+      console.log(chalk.bold(`Would upload ${filesToUpload.length} file(s) to "${projectName}":`));
+      for (const f of filesToUpload) {
+        console.log(`  ${chalk.cyan(f.relativePath)}`);
+      }
       return;
     }
 
-    let deleted = 0;
-    let failed = 0;
-    let folderNotFoundCount = 0;
-
-    // Execute Deletions
-    spinner.text = `Deleting ${filesToDelete.length} orphan files...`;
-    for (const file of filesToDelete) {
-      try {
-        await client.deleteEntity(projectId!, file.id, file.type);
-        deleted++;
-        spinner.text = `Deleting... (${deleted}/${filesToDelete.length})`;
-      } catch (error: any) {
-        console.error(chalk.yellow(`\nWarning: Failed to delete ${file.path}: ${error.message}`));
-        failed++;
-        if (error.message.includes('folder_not_found')) {
-          folderNotFoundCount++;
+    // If --probe-folder is set, or if we don't have a cached rootFolderId, try probing
+    if (options.probeFolder && !rootFolderId) {
+      spinner.text = 'Probing for correct folder ID...';
+      rootFolderId = await client.probeRootFolderId(projectId!) ?? undefined;
+      if (rootFolderId) {
+        // Save the discovered folder ID
+        if (existsSync(metaPath)) {
+          const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+          meta.rootFolderId = rootFolderId;
+          writeFileSync(metaPath, JSON.stringify(meta, null, 2));
         }
+        spinner.succeed(`Found root folder ID: ${rootFolderId}`);
+        spinner.start(`Uploading ${filesToUpload.length} file(s)...`);
+      } else {
+        spinner.fail('Could not find valid root folder ID');
+        console.log(chalk.yellow('Try manually specifying rootFolderId in .olcli.json'));
+        process.exit(1);
       }
     }
-    // ==========================================
-
 
     // Fetch folder tree once so uploads go into correct subfolders
     spinner.text = 'Resolving folder structure...';
@@ -895,6 +899,8 @@ program
     spinner.text = `Uploading ${filesToUpload.length} file(s)...`;
 
     let uploaded = 0;
+    let failed = 0;
+    let folderNotFoundCount = 0;
 
     for (const file of filesToUpload) {
       try {
@@ -919,18 +925,12 @@ program
     }
 
     if (failed > 0) {
-      spinner.warn(`Uploaded ${uploaded} file(s), deleted ${deleted} and ${failed} failed`);
+      spinner.warn(`Uploaded ${uploaded} file(s), ${failed} failed`);
       if (folderNotFoundCount > 0 && !rootFolderId) {
         console.log(chalk.yellow('  Tip: Try running with --probe-folder to find the correct folder ID'));
       }
     } else {
-      if(deleted ==0) {
-        spinner.succeed(`Uploaded ${uploaded} file(s) to "${projectName}"`);
-      }else if(uploaded ==0){
-        spinner.succeed(`Deleted ${deleted} file(s) from "${projectName}"`);
-      }else{
-        spinner.succeed(`Uploaded ${uploaded} file(s) to and deleted ${deleted} file(s)`);
-      }
+      spinner.succeed(`Uploaded ${uploaded} file(s) to "${projectName}"`);
     }
 
     setLastProject(projectId!);
@@ -942,9 +942,14 @@ program
 
 program
 .command('sync [dir]')
-.description('Pull then push (bidirectional sync)')
+.description('Pull then push (bidirectional sync, propagates local deletions)')
 .option('--project <name>', 'Project name or ID')
 .option('--verbose', 'Show detailed file operations')
+.option('--no-delete', 'Do not propagate local deletions to the remote (safer)')
+.option('--dry-run', 'Show what would change without applying')
+.option('--no-default-ignore', 'Disable built-in LaTeX artifact ignore list (only .olignore applies)')
+.option('--no-ignore', 'Disable all ignore filtering (escape hatch — uploads everything)')
+.option('--show-ignored', 'Print files skipped by ignore rules')
 .option('--cookie <session>', 'Session cookie override')
 .action(async (dir, options) => {
   const targetDir = dir || '.';
@@ -1001,32 +1006,59 @@ program
       mkdirSync(targetDir, { recursive: true });
     }
 
+    // Build ignore context (defaults + .olignore + .olignore.local)
+    const ignoreCtx = loadIgnore(targetDir, {
+      noDefaults: options.defaultIgnore === false,
+      disableAll: options.ignore === false,
+    });
+
     // Track local modifications
     const localFiles = new Map<string, { mtime: Date; content: Buffer }>();
+    const filesIgnored: string[] = [];
     const { readdirSync, statSync } = await import('node:fs');
 
     function scanLocalFiles(currentDir: string, relativeBase: string = '') {
       if (!existsSync(currentDir)) return;
       const entries = readdirSync(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue;
-        const fullPath = join(currentDir, entry.name);
-        const relativePath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          scanLocalFiles(fullPath, relativePath);
-        } else {
-          const stats = statSync(fullPath);
-          localFiles.set(relativePath, {
-            mtime: stats.mtime,
-            content: readFileSync(fullPath)
-          });
+      const texSiblings = buildTexSiblingSet(
+        entries.filter((e) => !e.isDirectory()).map((e) => e.name),
+      );
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue;
+          const fullPath = join(currentDir, entry.name);
+          const relativePath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            if (shouldIgnore(`${relativePath}/`, ignoreCtx)) {
+              filesIgnored.push(`${relativePath}/`);
+              continue;
+            }
+            scanLocalFiles(fullPath, relativePath);
+          } else {
+            if (shouldIgnore(relativePath, ignoreCtx, texSiblings)) {
+              filesIgnored.push(relativePath);
+              continue;
+            }
+            const stats = statSync(fullPath);
+            localFiles.set(relativePath, {
+              mtime: stats.mtime,
+              content: readFileSync(fullPath)
+            });
+          }
         }
-      }
     }
 
     // Read local files before overwriting
     if (existsSync(metaPath)) {
       scanLocalFiles(targetDir);
+    }
+
+    if (options.showIgnored && filesIgnored.length > 0) {
+      spinner.stop();
+      console.log(chalk.bold(chalk.dim(`Ignored ${filesIgnored.length} local file(s)/dir(s):`)));
+      for (const p of filesIgnored) {
+        console.log(chalk.dim(`  ${p}`));
+      }
+      spinner.start();
     }
 
     // Extract remote files
@@ -1039,15 +1071,57 @@ program
 
     // Merge: local changes take precedence for files modified after last pull
     let lastPull: Date | undefined;
+    let previousManifest: string[] = [];
     if (existsSync(metaPath)) {
       const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
       lastPull = meta.lastPull ? new Date(meta.lastPull) : undefined;
+      if (Array.isArray(meta.remoteManifest)) {
+        previousManifest = meta.remoteManifest as string[];
+      }
     }
 
     const filesToUpload: { path: string; content: Buffer }[] = [];
     const filesUpdatedLocally: string[] = [];
     const filesKeptLocal: string[] = [];
     const filesNewLocal: string[] = [];
+    const filesDeletedRemote: string[] = [];
+    const filesDeleteSkipped: { path: string; reason: string }[] = [];
+
+    // Detect locally-deleted files: present in previous manifest, missing locally,
+    // still present on the remote. Propagate the deletion to the remote BEFORE
+    // we write remote contents back over the working tree (otherwise the file
+    // would be silently restored — the bug reported in #7).
+    // Conflict policy: if the project has no previous manifest yet (first sync),
+    // we cannot distinguish "never existed locally" from "deleted locally", so
+    // skip deletion propagation on the very first sync.
+    if (options.delete !== false && previousManifest.length > 0 && existsSync(metaPath)) {
+      const locallyDeleted: string[] = [];
+      for (const path of previousManifest) {
+        if (path === 'output.pdf' || path.endsWith('/output.pdf')) continue;
+        if (!localFiles.has(path) && remoteFiles.has(path)) {
+          locallyDeleted.push(path);
+        }
+      }
+
+      if (locallyDeleted.length > 0) {
+        spinner.text = `Propagating ${locallyDeleted.length} local deletion(s) to remote...`;
+        for (const path of locallyDeleted) {
+          if (options.dryRun) {
+            filesDeletedRemote.push(path);
+            remoteFiles.delete(path);
+            continue;
+          }
+          try {
+            await client.deleteByPath(projectId, path);
+            filesDeletedRemote.push(path);
+            // Drop from remoteFiles so we don't re-extract it below
+            remoteFiles.delete(path);
+          } catch (err: any) {
+            filesDeleteSkipped.push({ path, reason: err.message || String(err) });
+          }
+        }
+      }
+    }
 
     spinner.text = 'Comparing files...';
 
@@ -1086,28 +1160,58 @@ program
     }
 
     // Upload local changes
-    if (filesToUpload.length > 0) {
+    if (filesToUpload.length > 0 && !options.dryRun) {
       spinner.text = `Uploading ${filesToUpload.length} local change(s)...`;
       for (const file of filesToUpload) {
         await client.uploadFile(projectId, null, file.path, file.content);
       }
     }
 
-    // Update metadata
-    writeFileSync(metaPath, JSON.stringify({
-      projectId,
-      projectName,
-      lastPull: new Date().toISOString(),
-      lastSync: new Date().toISOString()
-    }, null, 2));
+    // Refresh manifest of remote files post-sync (deletions out, new uploads in)
+    const newManifest = new Set<string>(remoteFiles.keys());
+    for (const f of filesToUpload) newManifest.add(f.path);
+    for (const p of filesDeletedRemote) newManifest.delete(p);
 
-    spinner.succeed(`Synced "${projectName}"`);
+    // Update metadata
+    if (!options.dryRun) {
+      writeFileSync(metaPath, JSON.stringify({
+        projectId,
+        projectName,
+        lastPull: new Date().toISOString(),
+        lastSync: new Date().toISOString(),
+        remoteManifest: Array.from(newManifest).sort()
+      }, null, 2));
+    }
+
+    if (options.dryRun) {
+      spinner.succeed(`Dry-run sync "${projectName}" (no changes applied)`);
+    } else {
+      spinner.succeed(`Synced "${projectName}"`);
+    }
 
     // Summary
     console.log(chalk.dim(`  ↓ ${filesUpdatedLocally.length} pulled from remote`));
     console.log(chalk.dim(`  ↑ ${filesToUpload.length} pushed to remote`));
+    if (filesDeletedRemote.length > 0) {
+      console.log(chalk.dim(`  ✖ ${filesDeletedRemote.length} deleted on remote`));
+    }
+    if (filesDeleteSkipped.length > 0) {
+      console.log(chalk.yellow(`  ⚠ ${filesDeleteSkipped.length} deletion(s) failed (kept remote)`));
+    }
 
     if (options.verbose) {
+      if (filesDeletedRemote.length > 0) {
+        console.log(chalk.red('\n  Deleted on remote (matched local deletion):'));
+        for (const f of filesDeletedRemote) {
+          console.log(chalk.dim(`    ${f}`));
+        }
+      }
+      if (filesDeleteSkipped.length > 0) {
+        console.log(chalk.yellow('\n  Deletion skipped (will retry on next sync):'));
+        for (const { path, reason } of filesDeleteSkipped) {
+          console.log(chalk.dim(`    ${path}  —  ${reason}`));
+        }
+      }
       if (filesKeptLocal.length > 0) {
         console.log(chalk.yellow('\n  Local changes pushed (local was newer):'));
         for (const f of filesKeptLocal) {
@@ -1165,6 +1269,43 @@ configCmd
 .description('Get the current session cookie name')
 .action(() => {
   console.log(getSessionCookieName());
+});
+
+program
+.command('ignored [dir]')
+.description('Show ignore patterns currently in effect for a project directory')
+.option('--no-default-ignore', 'Exclude built-in defaults from the listing')
+.option('--no-ignore', 'Show what --no-ignore would do (lists nothing)')
+.action((dir, options) => {
+  const targetDir = dir || '.';
+  const ctx = loadIgnore(targetDir, {
+    noDefaults: options.defaultIgnore === false,
+    disableAll: options.ignore === false,
+  });
+  if (!ctx.enabled) {
+    console.log(chalk.yellow('Ignore filtering is disabled (--no-ignore).'));
+    console.log(chalk.dim('Every local file would be uploaded.'));
+    return;
+  }
+  if (ctx.sources.length === 0) {
+    console.log(chalk.yellow('No ignore patterns active.'));
+    console.log(chalk.dim('Built-in defaults are disabled and no .olignore file was found.'));
+    return;
+  }
+  console.log(chalk.bold(`Ignore patterns in effect for ${targetDir}:`));
+  console.log(chalk.dim('(later sources override earlier ones; ! prefix negates)'));
+  for (const src of ctx.sources) {
+    console.log();
+    console.log(chalk.cyan(`── ${src.label} (${src.patterns.length}) ──`));
+    for (const p of src.patterns) {
+      console.log(`  ${p}`);
+    }
+  }
+  console.log();
+  console.log(chalk.dim(`Total: ${ctx.patterns.length} pattern(s)`));
+  if (ctx.defaultsEnabled) {
+    console.log(chalk.dim('Note: *.pdf is also ignored when a same-named *.tex/.ltx exists in the same folder.'));
+  }
 });
 
 program
