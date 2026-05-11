@@ -650,7 +650,7 @@ export class OverleafClient {
       if (!sid) return null;
 
       const buildPollUrl = () =>
-      `${this.baseUrl}/socket.io/1/xhr-polling/${sid}?projectId=${encodeURIComponent(projectId)}&t=${Date.now()}`;
+        `${this.baseUrl}/socket.io/1/xhr-polling/${sid}?projectId=${encodeURIComponent(projectId)}&t=${Date.now()}`;
 
       for (let attempt = 0; attempt < 6; attempt++) {
         const pollResponse = await this.httpRequest(buildPollUrl(), {
