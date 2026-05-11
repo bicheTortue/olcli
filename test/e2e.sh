@@ -19,6 +19,7 @@ TESTS_FAILED=0
 CLEANUP_FILES=()
 CLEANUP_REMOTE_FILES=()
 EXE="$(pwd)/dist/cli.js"
+GIT="git"
 
 if test -f $EXE; then
   if ! [[ -x "$EXE" ]]
@@ -36,6 +37,7 @@ PROJECT_NAME="${OLCLI_E2E_PROJECT_NAME:-olcli test}"
 
 # Temporary directory for test files
 TEST_DIR=$(mktemp -d)
+TEST_GIT_DIR=$(mktemp -d)
 trap cleanup EXIT
 
 #######################################
@@ -639,6 +641,39 @@ run_test "upload file with dashes and underscores" \
 
 run_test "download file with dashes and underscores" \
   "$EXE download 'test-file_123.txt' '$PROJECT_ID' -o '$TEST_DIR/dl_special.txt'"
+
+#######################################
+# Test: Git Integration
+#######################################
+
+log_section "Git commands testing (local only)"
+
+
+# Cloning
+run_test "Cloning the test dir" \
+  "$GIT clone overleaf::https://overleaf.com/project/$PROJECT_ID $TEST_GIT_DIR"
+cd $TEST_GIT_DIR
+
+
+# Create test file with unique content
+TEST_FILE="$TEST_GIT_DIR/${TEST_ID}git.txt"
+echo "$TEST_CONTENT" > "$TEST_FILE"
+CLEANUP_REMOTE_FILES+=("${TEST_ID}git.txt")
+
+# Adding a first file
+run_test "Cloning the test dir" \
+  "$GIT add $TEST_FILE ; $GIT commit -m 'Added file1' ; git push"
+
+
+# Create file in subfolder test
+mkdir $TEST_GIT_DIR/subfolder
+TEST_FILE2="$TEST_GIT_DIR/subfolder/${TEST_ID}_2.txt"
+echo "Second test file - $TEST_CONTENT" > "$TEST_FILE2"
+CLEANUP_REMOTE_FILES+=("${TEST_ID}_git2.txt")
+
+# Adding a second file
+run_test "Cloning the test dir" \
+  "$GIT add $TEST_FILE2 ; $GIT commit -m 'Added file2 in subfolder' ; git push"
 
 #######################################
 # Cleanup Note
