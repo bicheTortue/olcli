@@ -65,6 +65,7 @@ async function runWatch(mainFile: string, useDocker: boolean) {
     '-auxdir=.aux',             // Put all temp/aux files in a hidden .aux folder!
     '-outdir=.build',           // Keep the final PDF in the root folder!
     '-pvc',                     // MAGIC FLAG: Preview Continuously (Watch mode!)
+    '-shell-escape',
     mainFile
   ];
 
