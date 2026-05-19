@@ -113,7 +113,6 @@ async function getClient(cookieOpt?: string, baseUrlOpt?: string): Promise<Overl
     console.error('Or create .olauth file in current directory');
     process.exit(1);
   }
-  const baseUrl = baseUrlOpt || (program.opts().baseUrl as string | undefined) || getBaseUrl();
   const cookieName = (program.opts().cookieName as string | undefined) || getSessionCookieName();
   const client = await OverleafClient.fromSessionCookie(cookie, baseUrl, cookieName);
   if (program.opts().verbose) client.setVerbose(true);
