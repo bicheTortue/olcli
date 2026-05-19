@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-05-18
+
+### Fixed
+- **`olcli pdf` / `olcli output <type>` returned `Download failed: 404`** (#22) — Overleaf's CDN now requires `?clsiserverid=<id>` on every build-output download. We were stripping that hint. The compile response's `clsiServerId` field is now appended to all output URLs (`pdf`, `bbl`, `log`, `aux`, …).
+- **`olcli upload figures/fig01.png` placed the file in project root** instead of inside `figures/`. The CLI previously called `basename()` on the path and never resolved the folder tree. Now the relative path is preserved and the folder tree is loaded (and cached) on demand. Subfolders are auto-created if missing.
+- **`olcli sync` upload pass** also dropped subfolder information when pushing local-newer files. Same fix as above (`uploadFile` now self-resolves the folder tree when the caller doesn't pass one).
+
+### Added
+- **Global `--verbose` flag** (#21) — prints every HTTP request, status, content-type, and (on non-2xx) a 200-char snippet of the response body to stderr. Use as `olcli --verbose pdf` or `olcli pdf --verbose` for troubleshooting failed compiles, uploads, or auth.
+
+### Internal
+- New `OverleafClient.getOrLoadFolderTree(projectId)` / `invalidateFolderTree(projectId)` helpers with per-project caching, so callers no longer have to plumb a `folderTree` argument through every code path.
+
 ## [0.3.0] - 2026-04-27
 
 ### ⚠ Behavior change

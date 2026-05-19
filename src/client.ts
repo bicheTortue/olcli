@@ -85,11 +85,42 @@ export class OverleafClient {
   private cookies: Record<string, string>;
   private csrf: string;
   private baseUrl: string;
+  private verbose: boolean = false;
+  // Cache per-project folder trees so repeated uploads in sync/upload calls
+  // don't re-fetch the tree via Socket.IO on every file.
+  private folderTreeCache: Map<string, Record<string, string>> = new Map();
 
   constructor(credentials: Credentials) {
     this.cookies = credentials.cookies;
     this.csrf = credentials.csrf;
     this.baseUrl = credentials.baseUrl || DEFAULT_BASE_URL;
+  }
+
+  /** Enable or disable verbose request/response logging to stderr. */
+  setVerbose(v: boolean): void {
+    this.verbose = v;
+  }
+
+  /**
+   * Resolve (and cache) the folder tree for a project. Falls back to a
+   * minimal tree containing only the root folder when the Socket.IO probe
+   * fails (e.g. self-hosted Overleaf without that endpoint).
+   */
+  async getOrLoadFolderTree(projectId: string): Promise<Record<string, string>> {
+    const cached = this.folderTreeCache.get(projectId);
+    if (cached) return cached;
+    let tree = await this.getFolderTreeFromSocket(projectId);
+    if (!tree) {
+      const rootId = await this.getRootFolderId(projectId);
+      tree = { '': rootId };
+    }
+    this.folderTreeCache.set(projectId, tree);
+    return tree;
+  }
+
+  /** Drop the cached folder tree for a project (e.g. after rename/delete). */
+  invalidateFolderTree(projectId: string): void {
+    this.folderTreeCache.delete(projectId);
   }
 
   private projectUrl(): string {
@@ -249,6 +280,13 @@ export class OverleafClient {
     }
   }
 
+  private logVerbose(...args: any[]): void {
+    if (this.verbose) {
+      // eslint-disable-next-line no-console
+      console.error('[olcli]', ...args);
+    }
+  }
+
   private async httpRequest(url: string, options: {
     method?: string;
     headers?: Record<string, string>;
@@ -289,6 +327,7 @@ export class OverleafClient {
           const resHeaders = res.headers as Record<string, string | string[]>;
 
           if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+            this.logVerbose(`${method} ${reqUrl} -> ${status} redirect -> ${res.headers.location}`);
             const redirectUrl = new URL(res.headers.location, reqUrl).toString();
             res.resume();
             doRequest(redirectUrl, redirectsLeft - 1).then(resolve, reject);
@@ -306,10 +345,21 @@ export class OverleafClient {
               try {
                 body = JSON.parse(buffer.toString('utf-8'));
               } catch (e) {
+                this.logVerbose(`${method} ${reqUrl} -> ${status} (invalid JSON, ${buffer.length} bytes)`);
                 return reject(new Error(`Failed to parse JSON response from ${reqUrl}`));
               }
             }
-            resolve({ status, ok: status >= 200 && status < 300, headers: resHeaders, body });
+            const ok = status >= 200 && status < 300;
+            if (this.verbose) {
+              const ct = (resHeaders['content-type'] || '') as string;
+              let snippet = '';
+              if (!ok) {
+                const text = expect === 'buffer' ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
+                snippet = text ? ` body=${text.slice(0, 200).replace(/\s+/g, ' ')}` : '';
+              }
+              this.logVerbose(`${method} ${reqUrl} -> ${status} (${buffer.length}B ${ct})${snippet}`);
+            }
+            resolve({ status, ok, headers: resHeaders, body });
           });
           res.on('error', reject);
         });
@@ -775,8 +825,11 @@ export class OverleafClient {
       throw new Error('No PDF output found');
     }
 
+    // Overleaf's CDN requires ?clsiserverid=<id> for build-output downloads.
+    // Without it the build URL 404s. See: https://github.com/aloth/olcli/issues/22
+    const qs = data.clsiServerId ? `?clsiserverid=${encodeURIComponent(data.clsiServerId)}` : '';
     return {
-      pdfUrl: `${this.baseUrl}${pdfFile.url}`,
+      pdfUrl: `${this.baseUrl}${pdfFile.url}${qs}`,
       logs: data.compileGroup ? [`Compile group: ${data.compileGroup}`] : []
     };
   }
@@ -1262,11 +1315,15 @@ export class OverleafClient {
     // Extract just the filename without path
     const baseName = fileName.split('/').pop() || fileName;
 
-    // Resolve target folder: if fileName has a directory part and we have a folderTree, use it
+    // Resolve target folder: if fileName has a directory part, place the file there.
+    // Lazy-load + cache the folder tree when caller didn't supply one, so external
+    // callers (and our own `upload`/`sync` paths) don't silently dump files into root.
+    // See: https://github.com/aloth/olcli/issues/22 follow-up + 0.3.1 upload-fix.
     const dirPart = fileName.includes('/') ? fileName.split('/').slice(0, -1).join('/') : '';
     let targetFolderId: string;
-    if (dirPart && folderTree) {
-      targetFolderId = await this.resolveFolderId(projectId, folderTree, dirPart);
+    if (dirPart) {
+      const tree = folderTree || await this.getOrLoadFolderTree(projectId);
+      targetFolderId = await this.resolveFolderId(projectId, tree, dirPart);
     } else {
       targetFolderId = folderId || await this.getRootFolderId(projectId);
     }
@@ -1597,13 +1654,16 @@ export class OverleafClient {
     const data = response.body as any;
     const pdfFile = data.outputFiles?.find((f: any) => f.type === 'pdf');
 
+    // Overleaf's CDN requires ?clsiserverid=<id> for build-output downloads.
+    // Without it every output (pdf/log/bbl/...) 404s. See issue #22.
+    const qs = data.clsiServerId ? `?clsiserverid=${encodeURIComponent(data.clsiServerId)}` : '';
     return {
       status: data.status,
-      pdfUrl: pdfFile ? `${this.baseUrl}${pdfFile.url}` : undefined,
+      pdfUrl: pdfFile ? `${this.baseUrl}${pdfFile.url}${qs}` : undefined,
       outputFiles: (data.outputFiles || []).map((f: any) => ({
         path: f.path,
         type: f.type,
-        url: `${this.baseUrl}${f.url}`
+        url: `${this.baseUrl}${f.url}${qs}`
       }))
     };
   }

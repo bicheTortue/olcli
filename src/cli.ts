@@ -493,20 +493,27 @@ program
 // ─────────────────────────────────────────────────────────────────────────────
 
 program
-.command('upload <file> [project]')
-.description('Upload a file to a project')
-.option('--folder <id>', 'Target folder ID (default: root)')
-.option('--cookie <session>', 'Session cookie override')
-.action(async (file, project, options) => {
-  const spinner = ora('Uploading file...').start();
-  try {
-    const client = await getClient(options.cookie);
-    const proj = await resolveProject(client, project);
+  .command('upload <file> [project]')
+  .description('Upload a file to a project')
+  .option('--folder <id>', 'Target folder ID (default: root)')
+  .option('--cookie <session>', 'Session cookie override')
+  .action(async (file, project, options) => {
+    const spinner = ora('Uploading file...').start();
+    try {
+      const client = await getClient(options.cookie);
+      const proj = await resolveProject(client, project);
 
-    if (!existsSync(file)) {
-      spinner.fail(`File not found: ${file}`);
-      process.exit(1);
-    }
+      if (!existsSync(file)) {
+        spinner.fail(`File not found: ${file}`);
+        process.exit(1);
+      }
+
+      const content = readFileSync(file);
+      // Preserve the relative path (e.g. 'figures/fig01.png') so the file lands
+      // in the correct subfolder, not in project root. uploadFile() will
+      // lazy-resolve the folder tree when no folderId/tree is supplied.
+      // Normalize: strip leading './' and any leading slashes.
+      const fileName = file.replace(/^(\.\/)+/, '').replace(/^\/+/, '');
 
     const content = readFileSync(file);
     // Preserve the relative path (e.g. 'figures/fig01.png') so the file lands

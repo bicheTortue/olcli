@@ -178,6 +178,25 @@ All commands auto-detect the project when run from a synced directory (contains 
 | `olcli config set-cookie-name <name>` | Set the session cookie name |
 | `olcli check` | Show config paths and credential sources |
 
+### Global options
+
+These flags work with **every** command and may be placed before or after the command name:
+
+| Flag | Description |
+|------|-------------|
+| `--verbose` | Print every HTTP request, status, content-type, and (on errors) a response-body snippet to stderr. Useful for debugging failed compiles, 404s on `pdf`/`output`, auth issues, or unexpected upload behavior. |
+| `--base-url <url>` | Override the Overleaf instance base URL (also `OVERLEAF_BASE_URL` env var or `olcli config set-url`). |
+| `--cookie-name <name>` | Override the session cookie name (default `overleaf_session2`; older instances use `overleaf.sid`). |
+
+Examples:
+
+```bash
+olcli --verbose pdf                    # see every request the compile makes
+olcli pdf --verbose                    # same thing, flag after command
+olcli --verbose sync                   # debug a sync that's misbehaving
+olcli --verbose upload figures/a.png   # confirm the file is placed in figures/
+```
+
 ## Use Cases
 
 ### Local Editing with Overleaf Compilation
@@ -266,7 +285,7 @@ olcli output --list
 - Pushes local changes to remote
 - **Propagates local deletions to the remote** — if you delete a file locally, it's deleted on Overleaf on the next sync. Use `--no-delete` to opt out.
 - Filters out LaTeX build artifacts and OS noise
-- Use `--verbose` to see detailed file operations
+- Use `--verbose` to see detailed file operations (see [Global options](#global-options))
 - Use `--dry-run` to preview without applying
 
 #### How deletion propagation works
@@ -337,14 +356,14 @@ s%3AyourSessionCookieValue...
 
 ### Self-hosted Overleaf / ShareLaTeX
 
-You can point `olcli` at a self-hosted instance and override the session cookie name.
+You can point `olcli` at a self-hosted instance and override the session cookie name. Both flags are documented under [Global options](#global-options) and can be combined with any command.
 
 ```bash
 olcli --base-url https://latex.example.org list
 olcli --base-url https://latex.example.org --cookie-name overleaf.sid whoami
 ```
 
-Persist these settings in `olcli` config:
+Persist these settings in `olcli` config so you don't have to repeat them:
 
 ```bash
 olcli config set-url https://latex.example.org
